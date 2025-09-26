@@ -1,1 +1,1 @@
-# Exploring individual differences in cognitive flexibility: A data-driven time-frequency analysis combined with latent change structural equation modeling
+# Task-specific theta enhancement and domain-general alpha/beta suppression as oscillatory signa-tures of individual differences in cognitive flexibility
