@@ -1,0 +1,715 @@
+---
+title: "Individual Differences in Cognitive Flexibility"
+subtitle: "A Latent-Change Structural Equation Modeling Approach"
+author: "Mareike J. Hülsemann, Christoph Löffler, & Anna-Lena Schubert"
+date: "26 September 2025"
+output: 
+  html_document:
+    toc: true
+    toc_float: yes
+    theme: united
+---
+
+<!--
+% BSD 3-Clause License
+% 
+% Copyright (c) 2025, Mareike Huelsemann
+% 
+% Redistribution and use in source and binary forms, with or without
+% modification, are permitted provided that the following conditions are met:
+% 
+% 1. Redistributions of source code must retain the above copyright notice, this
+%    list of conditions and the following disclaimer.
+% 
+% 2. Redistributions in binary form must reproduce the above copyright notice,
+%    this list of conditions and the following disclaimer in the documentation
+%    and/or other materials provided with the distribution.
+% 
+% 3. Neither the name of the copyright holder nor the names of its
+%    contributors may be used to endorse or promote products derived from
+%    this software without specific prior written permission.
+% 
+% THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+% AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+% IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+% DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+% FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+% DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+% SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+% CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+% OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+% OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE. 
+-->
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(cache = FALSE, echo = FALSE, warning = FALSE, message = FALSE, fig.align = "center")
+```
+
+```{r fresh start}
+rm(list=ls())
+graphics.off()
+```
+
+
+```{r packages, include=FALSE}
+
+# load required libraries
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse,        # data formatting (dplyr, ggplot2)
+               here,             # start paths at project root
+               psych,            # data entry and data description
+               lavaan, semPlot,  # SEM
+               knitr,            # include nice tables
+               Hmisc, corrplot,  # plot correlation matrix
+               papaja)           # manuscript
+
+```
+
+
+```{r, functions}
+# replace outliers
+replace_outliers <- function(x) {
+  ifelse(abs(x) > 3, NA, x)
+}
+
+# z-standardize
+z_stand <- function(x) {
+  x = (x - mean(x, na.rm = T)) / sd(x, na.rm = T)
+}
+
+# calculcate CFI with manual baseline model
+calc_CFI <- function(fit_user_model, fit_baseline_model) {
+  lambda_Z = max(0,
+                 fit_user_model$fit["chisq"]     - fit_user_model$fit["df"])
+  lambda_B = max(fit_user_model$fit["chisq"]     - fit_user_model$fit["df"],
+                 fit_baseline_model$fit["chisq"] - fit_baseline_model$fit["df"])
+
+  1 - (lambda_Z) / (lambda_B) 
+}
+
+
+```
+
+
+```{r import data}
+
+# ---------- demographics ------------------------------------------------------
+
+PATH_IN  = here(file.path('data', 'questionnaires'))
+FILE_IN  = 'data.csv'
+demo <- read.csv(file.path(PATH_IN, FILE_IN), header = TRUE, sep = ';') %>%
+  select(c(Subject, Age))
+names(demo) = c('id','age')
+
+
+# ---------- intelligence and working memory data ------------------------------
+FILE_IN  = 'WMC and BIS scale scores.csv'
+iq_mem <- read.csv(file.path(PATH_IN, FILE_IN), header = TRUE, sep = ';')
+names(iq_mem)[1] = 'id'
+
+
+# ---------- time frequency data -----------------------------------------------
+
+clusters <- data.frame(ref  = c("cue",   "cue",     "target"),
+                       freq = c("Theta", "Alpha",   "Alpha"))
+tasks    <- c('oddeven', 'globallocal', 'numberletter')
+OPTION   <- '1SD'
+
+for (i in 1:nrow(clusters)) {
+  # definitions
+  ref = clusters$ref[i]
+  cl_name = clusters$freq[i]
+  
+  for (task_name in tasks) {
+    
+      PATH_IN      = here(file.path('derivatives', task_name, ref, 'tf_stats'))
+      FILE_IN_POWR = paste0('Exp23_', task_name, '_tf_power_core', OPTION, '_', cl_name, '.csv')
+      data <- read.csv(file.path(PATH_IN, FILE_IN_POWR), header = TRUE, sep = ",")
+      names(data)[1] = 'id'
+      data$id <- as.numeric(sapply(strsplit(as.character(data$id), "_"),
+                                   function(x) x[2]))
+      data$id[data$id==1191] = 119
+      
+      # calculate difference scores (first variable is id)
+      data <- data %>% mutate(V8  = data[,2] - data[,3],
+                              V9  = data[,4] - data[,6],
+                              V10 = data[,5] - data[,7])
+      
+      # name variables (first variable is id)
+      names(data)[8:10] = c(paste(ref, cl_name, task_name, 'diff', 'all', sep = "_"),
+                            paste(ref, cl_name, task_name, 'diff', 'odd', sep = "_"),
+                            paste(ref, cl_name, task_name, 'diff', 'even', sep = "_"))
+      
+      # save as unique variable
+      assign(paste("data", ref, cl_name, task_name, sep = "_"), data)
+    # }
+  }
+}
+
+
+``` 
+
+
+  
+```{r join data}
+  
+# ---------- join data frames --------------------------------------------------
+
+data_flex = full_join(demo, iq_mem, by = 'id')
+
+data_flex = full_join(data_flex,              data_cue_Theta_oddeven,      by = 'id')
+data_flex = full_join(data_flex,              data_cue_Theta_globallocal,  by = 'id')
+data_flex = full_join(data_flex,              data_cue_Theta_numberletter, by = 'id')
+
+data_flex = full_join(data_flex,              data_cue_Alpha_oddeven,      by = 'id')
+data_flex = full_join(data_flex,              data_cue_Alpha_globallocal,  by = 'id')
+data_flex = full_join(data_flex,              data_cue_Alpha_numberletter, by = 'id')
+
+data_flex = full_join(data_flex,              data_target_Alpha_oddeven,      by = 'id')
+data_flex = full_join(data_flex,              data_target_Alpha_globallocal,  by = 'id')
+data_flex = full_join(data_flex,              data_target_Alpha_numberletter, by = 'id')
+
+
+# subj id as factor
+data_flex$id <- as.factor(data_flex$id)
+```
+
+
+# DESCRIPTIVE STATISTICS
+
+## TASK PERFORMANCE
+
+For flexibility tasks, all participants performing below 70 % accuracy were removed from the time-frequency analysis. This is equivalent to remove all participants performing 2 SD below the mean performance. No such cutoff was defined for BIS or memory tasks. The BIS is quality checked during manual scoring. For the memory tasks, it might be, that participants perform at chance level, especially for higher memory loads, because they are at the top of their working memory capacity. These data should not be eliminated. However, general outlier analyses are conducted and univariate outliers are removed (z-standardized values > $\pm$ 3).
+
+
+## DISTRIBUTION
+
+We check whether data is normally distributed.
+
+```{r check data before outlier removal}
+
+# check whether variables are normally distributed
+summary_stats <- psych::describe(data_flex)
+knitr::kable(summary_stats, caption = "Distribution of variables in raw data",
+             digits = 3)
+
+# print variables without approximate normal distribution
+not_normal <- summary_stats[abs(summary_stats$skew) > 2 | abs(summary_stats$kurtosis) > 7,]
+knitr::kable(not_normal, caption = "Variables without approximate normal distribution",
+             digits = 3)
+
+```
+
+We decide to assume approximate normal distribution for the WMC variable according to Hair (2008).
+
+We z-standardize each variable, replace outliers ($-3 < z < 3$), and standardize once again after replacing outliers.
+
+
+
+```{r check data after outlier removal}
+
+# standardize data
+zdata_flex <- data_flex %>%
+  mutate(across(where(is.numeric), z_stand)) # use custom function z_stand for
+
+# replace outliers
+zdata_flex <- zdata_flex %>%
+  mutate(across(where(is.numeric), replace_outliers))
+
+# standardize data
+zdata_flex <- zdata_flex %>%
+  mutate(across(where(is.numeric), z_stand)) # use custom function z_stand for
+
+# check again
+zsummary_stats <- psych::describe(zdata_flex)
+knitr::kable(zsummary_stats, caption = "Distribution of variables in z-standardized data after outlier removal",
+             digits = 3)
+
+# print variables without approximate normal distribution
+znot_normal <- zsummary_stats[abs(zsummary_stats$skew) > 2 | abs(zsummary_stats$kurtosis) > 7,]
+knitr::kable(znot_normal, caption = "Variables without approximate normal distribution.",
+             digits = 3)
+```
+
+After outlier removal, all of the variables are approximately normally distributed.
+
+
+
+
+## CORRELATIONS & RELIABILITIES
+
+```{r}
+# calculate zero-order correlations for all variables
+corr_matrix <- zdata_flex %>% 
+  select(-id) %>%
+  cor(use = "pairwise.complete.obs") %>%
+  as.data.frame
+
+# catch reliabilities
+reliabilities_raw = corr_matrix[ grepl( "_odd$" , rownames(corr_matrix) ),
+                                 grepl( "_even$" , colnames(corr_matrix) ) ]
+reliabilities_raw = diag(as.matrix(reliabilities_raw))
+
+# apply Spearman-Brown correction
+reliabilities_sb = (2*reliabilities_raw) / (1+reliabilities_raw)
+
+# delete odd- and even- variables
+corr_matrix = as.data.frame(corr_matrix)
+corr_matrix = corr_matrix[ !grepl( "_odd$" , rownames(corr_matrix) ),
+                            !grepl( "_odd$" , colnames(corr_matrix) ) ]
+corr_matrix = corr_matrix[ !grepl( "_even$" , rownames(corr_matrix) ),
+                            !grepl( "_even$" , colnames(corr_matrix) ) ]
+corr_matrix = as.matrix(corr_matrix)
+
+# delete upper triangular part of matrix
+corr_matrix[upper.tri(corr_matrix, diag = TRUE)] <- NA
+
+# add reliabilities to diagonale of correlation matrix
+diag(corr_matrix)[15:ncol(corr_matrix)] = reliabilities_sb
+
+# add Cronbachs-Alpha reliabilities for BIS & WMC from original paper 
+# (DOI: 10.1007/s00426-023-01924-7)
+# Memory updating, Binding, Operation span, Sentence span,
+# BIS-PC, BIS-M, BIS-PS, BIS-C
+diag(corr_matrix)[2:9] = c(0.88, 0.82, 0.89, 0.87,
+                           0.75, 0.58, 0.49, 0.45)
+
+
+# ---------- select variables for manifest difference scores -------------------
+corr_matrix = as.data.frame(corr_matrix)
+corr_diff = corr_matrix[ grepl( "diff_all" , names(corr_matrix) ),
+                         grepl( "diff_all" , names(corr_matrix) ) ]
+
+
+# ---------- select variables for condition scores -----------------------------
+corr_cond = corr_matrix[ !grepl( "diff_all" , names(corr_matrix) ),
+                         !grepl( "diff_all" , names(corr_matrix) ) ] %>%
+  select(-c(V_Mean, N_Mean, F_Mean, g_Mean, G_total)) %>%
+  filter(!(row.names(.) %in% c("V_Mean", "N_Mean", "F_Mean", "g_Mean", "G_total")))
+
+corrplot(as.matrix(corr_diff),
+  method = "color",
+  type = "lower",
+  title = "Manifest Difference Scores",
+  tl.col = "black",
+  tl.pos = 'l',
+  addCoef.col = "black",
+  number.cex = .7)
+
+corrplot(as.matrix(corr_cond[-1,-1]),
+  method = "color",
+  type = "lower",
+  title = "Condition Scores",
+  tl.col = "black",
+  tl.pos = 'l',
+  tl.cex = .6)
+```
+
+
+# MEASUREMENT MODELS FOR FLEXIBILITY
+
+```{r}
+# latent change model
+model_lc <- '
+  # measurement model
+    sw =~ oe_switch + gl_switch + nl_switch
+    rp =~ oe_repeat + gl_repeat + nl_repeat
+    
+  # method factors
+    gl =~ 1*gl_switch + 1*gl_repeat
+    nl =~ 1*nl_switch + 1*nl_repeat
+    
+  # structural model
+   sw ~ 1*rp
+   lc =~ 1*sw
+   lc ~~ rp
+  
+  # fix intercepts to 0  
+    oe_switch ~ 0
+    oe_repeat ~ 0
+    gl_switch ~ 0
+    gl_repeat ~ 0
+    nl_switch ~ 0
+    nl_repeat ~ 0
+   
+  # define independence of latent variables and method factors
+   lc ~~ 0*gl + 0*nl
+   rp ~~ 0*gl + 0*nl
+   gl ~~ 0*nl
+'
+   
+# baseline model
+model_bl_lc <- '
+  # fix intercepts to 0  
+    oe_switch ~ 0
+    oe_repeat ~ 0
+    gl_switch ~ 0
+    gl_repeat ~ 0
+    nl_switch ~ 0
+    nl_repeat ~ 0
+'
+
+```
+
+
+## Cue-related Theta
+
+```{r}
+# select relevant data
+tmp_data <- zdata_flex %>%
+  select(cue_Theta_oddeven_switch_all,
+         cue_Theta_oddeven_repeat_all,
+         cue_Theta_globallocal_switch_all,
+         cue_Theta_globallocal_repeat_all,
+         cue_Theta_numberletter_switch_all,
+         cue_Theta_numberletter_repeat_all)
+names(tmp_data) = c('oe_switch', 'oe_repeat', 
+                    'gl_switch', 'gl_repeat', 
+                    'nl_switch', 'nl_repeat')
+
+# count missings
+missings = sum(tmp_data  %>% is.na())
+```
+There are `r printnum(missings)` missings in the data.
+
+```{r}
+# fit SEM
+fit    <- sem(model_lc,    data = tmp_data, estimator = "ML", missing = "fiml")
+fit_bl <- sem(model_bl_lc, data = tmp_data, estimator = "ML", missing = "fiml")
+
+# get results with beta-weights
+results = summary(fit, fit.measures =TRUE, standardized = TRUE, ci = TRUE)
+results
+results_cue_theta_lc = results
+results_bl = summary(fit_bl, fit.measures = TRUE)
+
+# calculate fit indices
+CFI = calc_CFI(results, results_bl) 
+CFI_cue_theta_lc = CFI
+```
+
+The latent change model with cue-related theta ERSP `r ifelse(results$header$optim.converged,"did", "did not")` converge.
+
+Model fit was `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding CFI and `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding RMSEA, $\chi^2$(`r printnum(results$fit["df"], digits=0)`) = `r printnum(results$fit["chisq"])`, *p* `r printp(results$fit["pvalue"], add_equals = TRUE)`, CFI = `r printnum(CFI, gt1 = FALSE)`, RMSEA = `r printnum(results$fit["rmsea"], gt1 = FALSE)`, 90% CI [`r printnum(results$fit["rmsea.ci.lower"], gt1 = FALSE, digits=3)`, `r printnum(results$fit["rmsea.ci.upper"], gt1 = FALSE, digits=3)`].
+
+Flexibility `r ifelse(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"] < .05, 'can', 'cannot')` be captured by this model, as the latent change factor `r ifelse(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"] < .05, 'is', 'is not')` significant (*p* `r printp(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"], add_equals = TRUE)`).
+
+The correlation between the latent flexibility factor and the latent repeat factor `r ifelse(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","pvalue"] < .05, 'is', 'is not')` significant (r = `r printnum(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","std.all"], gt1 = FALSE)`, *p* `r printp(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","pvalue"], add_equals = TRUE)`).
+
+
+```{r}
+# display parameter estimates
+kable(parameterEstimates(fit), digits = 3, caption = "Parameter Estimates")
+
+# extract standardized solution
+kable(standardizedSolution(fit), digits = 3, caption = "Standardized Solution")
+```
+
+
+
+## Cue-related Alpha
+
+```{r}
+# select relevant data
+tmp_data <- zdata_flex %>%
+  select(cue_Alpha_oddeven_switch_all,
+         cue_Alpha_oddeven_repeat_all,
+         cue_Alpha_globallocal_switch_all,
+         cue_Alpha_globallocal_repeat_all,
+         cue_Alpha_numberletter_switch_all,
+         cue_Alpha_numberletter_repeat_all)
+names(tmp_data) = c('oe_switch', 'oe_repeat', 
+                    'gl_switch', 'gl_repeat', 
+                    'nl_switch', 'nl_repeat')
+
+# count missings
+missings = sum(tmp_data  %>% is.na())
+```
+There are `r printnum(missings)` missings in the data.
+
+```{r}
+# fit SEM
+fit    <- sem(model_lc,    data = tmp_data, estimator = "ML", missing = "fiml")
+fit_bl <- sem(model_bl_lc, data = tmp_data, estimator = "ML", missing = "fiml")
+
+# get results with beta-weights
+results = summary(fit, fit.measures =TRUE, standardized = TRUE, ci = TRUE)
+results
+results_cue_alpha_lc = results
+results_bl = summary(fit_bl, fit.measures = TRUE)
+
+# calculate fit indices
+CFI = calc_CFI(results, results_bl) 
+CFI_cue_alpha_lc = CFI
+
+```
+
+The latent change model with cue-related alpha ERSP `r ifelse(results$header$optim.converged,"did", "did not")` converge.
+
+Model fit was `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding CFI and `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding RMSEA, $\chi^2$(`r printnum(results$fit["df"], digits=0)`) = `r printnum(results$fit["chisq"])`, *p* `r printp(results$fit["pvalue"], add_equals = TRUE)`, CFI = `r printnum(CFI, gt1 = FALSE)`, RMSEA = `r printnum(results$fit["rmsea"], gt1 = FALSE)`, 90% CI [`r printnum(results$fit["rmsea.ci.lower"], gt1 = FALSE, digits=3)`, `r printnum(results$fit["rmsea.ci.upper"], gt1 = FALSE, digits=3)`].
+
+Flexibility `r ifelse(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"] < .05, 'can', 'cannot')` be captured by this model, as the latent change factor `r ifelse(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"] < .05, 'is', 'is not')` significant (*p* `r printp(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"], add_equals = TRUE)`).
+
+The correlation between the latent flexibility factor and the latent repeat factor `r ifelse(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","pvalue"] < .05, 'is', 'is not')` significant (r = `r printnum(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","std.all"], gt1 = FALSE)`, *p* `r printp(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","pvalue"], add_equals = TRUE)`).
+
+
+```{r}
+# display parameter estimates
+kable(parameterEstimates(fit), digits = 3, caption = "Parameter Estimates")
+
+# extract standardized solution
+kable(standardizedSolution(fit), digits = 3, caption = "Standardized Solution")
+```
+
+
+
+## Target-related Alpha
+
+```{r}
+# select relevant data
+tmp_data <- zdata_flex %>%
+  select(target_Alpha_oddeven_switch_all,
+         target_Alpha_oddeven_repeat_all,
+         target_Alpha_globallocal_switch_all,
+         target_Alpha_globallocal_repeat_all,
+         target_Alpha_numberletter_switch_all,
+         target_Alpha_numberletter_repeat_all)
+names(tmp_data) = c('oe_switch', 'oe_repeat', 
+                    'gl_switch', 'gl_repeat', 
+                    'nl_switch', 'nl_repeat')
+
+# count missings
+missings = sum(tmp_data  %>% is.na())
+```
+There are `r printnum(missings)` missings in the data.
+
+```{r}
+# fit SEM
+fit    <- sem(model_lc,    data = tmp_data, estimator = "ML", missing = "fiml")
+fit_bl <- sem(model_bl_lc, data = tmp_data, estimator = "ML", missing = "fiml")
+
+# get results with beta-weights
+results = summary(fit, fit.measures =TRUE, standardized = TRUE, ci = TRUE)
+results
+results_target_alpha_lc = results
+results_bl = summary(fit_bl, fit.measures = TRUE)
+
+# calculate fit indices
+CFI = calc_CFI(results, results_bl)
+CFI_target_alpha_lc = CFI
+
+```
+
+The latent change model with target-related alpha ERSP `r ifelse(results$header$optim.converged,"did", "did not")` converge.
+
+Model fit was `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding CFI and `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding RMSEA, $\chi^2$(`r printnum(results$fit["df"], digits=0)`) = `r printnum(results$fit["chisq"])`, *p* `r printp(results$fit["pvalue"], add_equals = TRUE)`, CFI = `r printnum(CFI, gt1 = FALSE)`, RMSEA = `r printnum(results$fit["rmsea"], gt1 = FALSE)`, 90% CI [`r printnum(results$fit["rmsea.ci.lower"], gt1 = FALSE, digits=3)`, `r printnum(results$fit["rmsea.ci.upper"], gt1 = FALSE, digits=3)`].
+
+Flexibility `r ifelse(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"] < .05, 'can', 'cannot')` be captured by this model, as the latent change factor `r ifelse(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"] < .05, 'is', 'is not')` significant (*p* `r printp(results$pe[results$pe$lhs == "lc" & results$pe$rhs == "lc","pvalue"], add_equals = TRUE)`).
+
+The correlation between the latent flexibility factor and the latent repeat factor `r ifelse(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","pvalue"] < .05, 'is', 'is not')` significant (r = `r printnum(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","std.all"], gt1 = FALSE)`, *p* `r printp(results$pe[results$pe$lhs == "rp" & results$pe$op == "~~" & results$pe$rhs == "lc","pvalue"], add_equals = TRUE)`).
+
+
+```{r}
+# display parameter estimates
+kable(parameterEstimates(fit), digits = 3, caption = "Parameter Estimates")
+
+# extract standardized solution
+kable(standardizedSolution(fit), digits = 3, caption = "Standardized Solution")
+```
+
+
+## Overview
+
+
+ERSP cluster | converged | $\chi^2$ | df | *p* | CFI | RMSEA [90% CI] | p of flexibility factor |
+| :-- | --: | --: | --: | --: | --: | ----: | --: |
+cue-related theta |  `r ifelse(results_cue_theta_lc$header$optim.converged,"yes", "no")` | `r printnum(results_cue_theta_lc$fit["chisq"])` | `r printnum(results_cue_theta_lc$fit["df"], digits=0)` | `r printp(results_cue_theta_lc$fit["pvalue"], add_equals = TRUE)` | `r printnum(CFI_cue_theta_lc, gt1 = FALSE)` | `r printnum(results_cue_theta_lc$fit["rmsea"], gt1 = FALSE)` [`r printnum(results_cue_theta_lc$fit["rmsea.ci.lower"], gt1 = FALSE, digits = 3)`, `r printnum(results_cue_theta_lc$fit["rmsea.ci.upper"], gt1 = FALSE, digits = 3)`] | `r printp(results_cue_theta_lc$pe[results_cue_theta_lc$pe$lhs == "lc" & results_cue_theta_lc$pe$rhs == "lc","pvalue"], add_equals = TRUE)`
+cue-related alpha | `r ifelse(results_cue_alpha_lc$header$optim.converged,"yes", "no")` | `r printnum(results_cue_alpha_lc$fit["chisq"])` | `r printnum(results_cue_alpha_lc$fit["df"], digits=0)` | `r printp(results_cue_alpha_lc$fit["pvalue"], add_equals = TRUE)` | `r printnum(CFI_cue_alpha_lc, gt1 = FALSE)` | `r printnum(results_cue_alpha_lc$fit["rmsea"], gt1 = FALSE)` [`r printnum(results_cue_alpha_lc$fit["rmsea.ci.lower"], gt1 = FALSE, digits = 3)`, `r printnum(results_cue_alpha_lc$fit["rmsea.ci.upper"], gt1 = FALSE, digits = 3)`] | `r printp(results_cue_alpha_lc$pe[results_cue_alpha_lc$pe$lhs == "lc" & results_cue_alpha_lc$pe$rhs == "lc","pvalue"], add_equals = TRUE)`
+target-related alpha | `r ifelse(results_target_alpha_lc$header$optim.converged,"yes", "no")` | `r printnum(results_target_alpha_lc$fit["chisq"])` | `r printnum(results_target_alpha_lc$fit["df"], digits=0)` | `r printp(results_target_alpha_lc$fit["pvalue"], add_equals = TRUE)` | `r printnum(CFI_target_alpha_lc, gt1 = FALSE)` | `r printnum(results_target_alpha_lc$fit["rmsea"], gt1 = FALSE)` [`r printnum(results_target_alpha_lc$fit["rmsea.ci.lower"], gt1 = FALSE, digits = 3)`, `r printnum(results_target_alpha_lc$fit["rmsea.ci.upper"], gt1 = FALSE, digits = 3)`] | `r printp(results_target_alpha_lc$pe[results_target_alpha_lc$pe$lhs == "lc" & results_target_alpha_lc$pe$rhs == "lc","pvalue"], add_equals = TRUE)`
+
+*Note.* The values here have simply been rounded. For the reported confidence intervals, the lower limit has been rounded down, while the upper limit has been rounded up.
+
+ 
+
+
+# FLEXIBILITY, INTELLIGENCE, AND WMC
+
+```{r}
+# latent change model
+model_lc_g <- '
+  # measurement model
+    sw_cue =~ oe_cue_switch + gl_cue_switch + nl_cue_switch
+    rp_cue =~ oe_cue_repeat + gl_cue_repeat + nl_cue_repeat
+    sw_target =~ oe_target_switch + gl_target_switch + nl_target_switch
+    rp_target =~ oe_target_repeat + gl_target_repeat + nl_target_repeat
+    wmc =~ WMC_MU + WMC_Binding + WMC_OpSp + WMC_SenSp
+    g =~ BIS_PC + BIS_M + BIS_PS + BIS_C
+    
+  # method factors
+    gl_cue =~ 1*gl_cue_switch + 1*gl_cue_repeat
+    nl_cue =~ 1*nl_cue_switch + 1*nl_cue_repeat
+    gl_target =~ 1*gl_target_switch + 1*gl_target_repeat
+    nl_target =~ 1*nl_target_switch + 1*nl_target_repeat
+    
+  # structural model
+    sw_cue ~ 1*rp_cue
+    lc_cue =~ 1*sw_cue
+    lc_cue ~~ rp_cue
+    
+    sw_target ~ 1*rp_target
+    lc_target =~ 1*sw_target
+    lc_target ~~ rp_target
+  
+  # fix intercepts to 0  
+    oe_cue_switch ~ 0
+    oe_cue_repeat ~ 0
+    gl_cue_switch ~ 0
+    gl_cue_repeat ~ 0
+    nl_cue_switch ~ 0
+    nl_cue_repeat ~ 0
+    oe_target_switch ~ 0
+    oe_target_repeat ~ 0
+    gl_target_switch ~ 0
+    gl_target_repeat ~ 0
+    nl_target_switch ~ 0
+    nl_target_repeat ~ 0
+    WMC_MU      ~ 0 
+    WMC_Binding ~ 0 
+    WMC_OpSp    ~ 0 
+    WMC_SenSp   ~ 0
+    BIS_PC ~ 0 
+    BIS_M  ~ 0 
+    BIS_PS ~ 0 
+    BIS_C  ~ 0
+    
+  # set correlations between exogen variables to 0
+    lc_cue ~~ 0*gl_cue + 0*nl_cue + 0*gl_target + 0*nl_target
+    rp_cue ~~ 0*gl_cue + 0*nl_cue + 0*gl_target + 0*nl_target
+    gl_cue ~~ 0*nl_cue + 0*nl_target
+    
+    lc_target ~~ 0*gl_target + 0*nl_target + 0*gl_cue + 0*nl_cue
+    rp_target ~~ 0*gl_target + 0*nl_target + 0*gl_cue + 0*nl_cue
+    gl_target ~~ 0*nl_target + 0*nl_cue
+    
+    wmc ~~ 0*gl_cue + 0*nl_cue + 0*gl_target + 0*nl_target
+    g ~~ 0*gl_cue + 0*nl_cue + 0*gl_target + 0*nl_target
+    
+  # residual correlations
+    WMC_OpSp ~~ WMC_SenSp
+    oe_cue_switch ~~ oe_target_switch
+    gl_cue_switch ~~ gl_target_switch
+    nl_cue_switch ~~ nl_target_switch
+    oe_cue_repeat ~~ oe_target_repeat
+    gl_cue_repeat ~~ gl_target_repeat
+    nl_cue_repeat ~~ nl_target_repeat
+'
+
+# baseline model
+model_bl_lc_g <- '
+  # fix intercepts to 0  
+    oe_cue_switch ~ 0
+    oe_cue_repeat ~ 0
+    gl_cue_switch ~ 0
+    gl_cue_repeat ~ 0
+    nl_cue_switch ~ 0
+    nl_cue_repeat ~ 0
+    oe_target_switch ~ 0
+    oe_target_repeat ~ 0
+    gl_target_switch ~ 0
+    gl_target_repeat ~ 0
+    nl_target_switch ~ 0
+    nl_target_repeat ~ 0
+    WMC_MU      ~ 0 
+    WMC_Binding ~ 0 
+    WMC_OpSp    ~ 0 
+    WMC_SenSp   ~ 0
+    BIS_PC ~ 0 
+    BIS_M  ~ 0 
+    BIS_PS ~ 0 
+    BIS_C  ~ 0
+'
+```
+
+## Integrated alpha-based flexibility model
+
+```{r}
+# select relevant data
+tmp_data <- zdata_flex %>%
+  select(BIS_PC, BIS_M, BIS_PS, BIS_C,
+         WMC_MU, WMC_Binding, WMC_OpSp, WMC_SenSp,
+         cue_Alpha_oddeven_switch_all,
+         cue_Alpha_oddeven_repeat_all,
+         cue_Alpha_globallocal_switch_all,
+         cue_Alpha_globallocal_repeat_all,
+         cue_Alpha_numberletter_switch_all,
+         cue_Alpha_numberletter_repeat_all,
+         target_Alpha_oddeven_switch_all,
+         target_Alpha_oddeven_repeat_all,
+         target_Alpha_globallocal_switch_all,
+         target_Alpha_globallocal_repeat_all,
+         target_Alpha_numberletter_switch_all,
+         target_Alpha_numberletter_repeat_all)
+names(tmp_data)[9:ncol(tmp_data)] = c('oe_cue_switch', 'oe_cue_repeat',
+                                      'gl_cue_switch', 'gl_cue_repeat',
+                                      'nl_cue_switch', 'nl_cue_repeat',
+                                      'oe_target_switch', 'oe_target_repeat',
+                                      'gl_target_switch', 'gl_target_repeat',
+                                      'nl_target_switch', 'nl_target_repeat')
+
+# count missings
+missings = sum(tmp_data  %>% is.na())
+```
+There are `r printnum(missings)` missings in the data.
+
+```{r}
+# fit SEM
+fit    <- sem(model_lc_g,    data = tmp_data, estimator = "ML", missing = "fiml")
+fit_bl <- sem(model_bl_lc_g, data = tmp_data, estimator = "ML", missing = "fiml")
+
+# get results with beta-weights
+results = summary(fit, fit.measures =TRUE, standardized = TRUE, ci = TRUE)
+results
+results_lc_g = results
+results_bl = summary(fit_bl, fit.measures = TRUE)
+
+# calculate fit indices
+CFI = calc_CFI(results, results_bl)
+CFI_lc_g = CFI
+
+```
+
+The latent change model with cue-related theta ERSP `r ifelse(results$header$optim.converged,"did", "did not")` converge.
+
+Model fit was `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding CFI and `r case_when(results$fit["rmsea"] < .05 ~ "good", results$fit["rmsea"] < .08 ~ "acceptable", TRUE ~ "not satisfactory")` regarding RMSEA, $\chi^2$(`r printnum(results$fit["df"], digits=0)`) = `r printnum(results$fit["chisq"])`, *p* `r printp(results$fit["pvalue"], add_equals = TRUE)`, CFI = `r printnum(CFI, gt1 = FALSE)`, RMSEA = `r printnum(results$fit["rmsea"], gt1 = FALSE)`, 90% CI [`r printnum(results$fit["rmsea.ci.lower"], gt1 = FALSE, digits=3)`, `r printnum(results$fit["rmsea.ci.upper"], gt1 = FALSE, digits=3)`].
+
+Cue-related flexibility `r ifelse(results$pe[results$pe$lhs == "lc_cue" & results$pe$rhs == "lc_cue","pvalue"] < .05, 'can', 'cannot')` be captured by this model, as the latent change factor `r ifelse(results$pe[results$pe$lhs == "lc_cue" & results$pe$rhs == "lc_cue","pvalue"] < .05, 'is', 'is not')` significant (*p* `r printp(results$pe[results$pe$lhs == "lc_cue" & results$pe$rhs == "lc_cue","pvalue"], add_equals = TRUE)`).
+
+Target-related flexibility `r ifelse(results$pe[results$pe$lhs == "lc_target" & results$pe$rhs == "lc_target","pvalue"] < .05, 'can', 'cannot')` be captured by this model, as the latent change factor `r ifelse(results$pe[results$pe$lhs == "lc_target" & results$pe$rhs == "lc_target","pvalue"] < .05, 'is', 'is not')` significant (*p* `r printp(results$pe[results$pe$lhs == "lc_target" & results$pe$rhs == "lc_target","pvalue"], add_equals = TRUE)`).
+
+
+```{r}
+# display parameter estimates
+kable(parameterEstimates(fit), digits = 3, caption = "Parameter Estimates")
+
+# extract standardized solution
+kable(standardizedSolution(fit), digits = 3, caption = "Standardized Solution")
+```
+
+## Correlations
+
+| | | 2. lc_target | 3. rp_cue | 4. rp_target | 5. BIS | 6. WMC |
+| -: | :--- | --: | --: | --: | --: | --: | --: |
+1. | lc_cue | `r printnum(results$pe[results$pe$lhs == "lc_cue" & results$pe$op == "~~" & results$pe$rhs == "lc_target","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$lhs == "lc_cue" & results$pe$op == "~~" & results$pe$rhs == "lc_target","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "rp_cue","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "rp_cue","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "rp_target","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "rp_target","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "g","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "g","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "wmc","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_cue" & results$pe$op == "~~" & results$pe$lhs == "wmc","pvalue"], add_equals = TRUE)`]
+2. | lc_target | | `r printnum(results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "rp_cue","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "rp_cue","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "rp_target","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "rp_target","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "g","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "g","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "wmc","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "lc_target" & results$pe$op == "~~" & results$pe$lhs == "wmc","pvalue"], add_equals = TRUE)`]
+3. | rp_cue | | | `r printnum(results$pe[results$pe$lhs == "rp_cue" & results$pe$op == "~~" & results$pe$rhs == "rp_target","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$lhs == "rp_cue" & results$pe$op == "~~" & results$pe$rhs == "rp_target","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$lhs == "rp_cue" & results$pe$op == "~~" & results$pe$rhs == "g","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$lhs == "rp_cue" & results$pe$op == "~~" & results$pe$rhs == "g","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$lhs == "rp_cue" & results$pe$op == "~~" & results$pe$rhs == "wmc","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$lhs == "rp_cue" & results$pe$op == "~~" & results$pe$rhs == "wmc","pvalue"], add_equals = TRUE)`]
+4. | rp_target | | | | `r printnum(results$pe[results$pe$lhs == "rp_target" & results$pe$op == "~~" & results$pe$rhs == "g","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$lhs == "rp_target" & results$pe$op == "~~" & results$pe$rhs == "g","pvalue"], add_equals = TRUE)`] | `r printnum(results$pe[results$pe$lhs == "rp_target" & results$pe$op == "~~" & results$pe$rhs == "wmc","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$lhs == "rp_target" & results$pe$op == "~~" & results$pe$rhs == "wmc","pvalue"], add_equals = TRUE)`]
+5. | BIS | | | | | `r printnum(results$pe[results$pe$rhs == "g" & results$pe$op == "~~" & results$pe$lhs == "wmc","std.all"], gt1 = FALSE)` [`r printp(  results$pe[results$pe$rhs == "g" & results$pe$op == "~~" & results$pe$lhs == "wmc","pvalue"], add_equals = TRUE)`]
+
+
+# Version
+
+```{r session info for reproducibility}
+sessionInfo()
+```
