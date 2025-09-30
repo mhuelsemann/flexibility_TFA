@@ -1,0 +1,1 @@
+Raw EEG data can be downloaded from https://osf.io/4pvz3/ .
